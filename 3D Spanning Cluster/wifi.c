@@ -53,10 +53,13 @@ int main (int argc, char **argv)  {
   int seedtime=0;
 
   /* Default Values */
-  Sinit = 20; Pinit = 0.34; R = 1.0;
+  Sinit = 100; Pinit = 0.7; R = 1.0;
   int nP = 1; double deltaP = 0.015;
-  int nS = 5; double deltaS = 5.0;
-  int cellmin=1, cellmax=1;
+  int nS = 1; double deltaS = 5.0;
+  int cellmin=20, cellmax=20;
+  cellmin = (int)round(Sinit/16)*8;
+  cellmax = cellmin;
+  //printf("%d %d", cellmin, cellmax);
 
   /* Read command line arguments */
   int ra = read_args(argc,argv,&R,&Sinit,&deltaS,&nS,&Pinit,&deltaP,&nP,
@@ -224,13 +227,204 @@ void destroy_domain_decomp(struct cell_domain* dom)
   free(dom->cell_nrtr);
 }
 
+typedef struct cube_region {
+  int startX, startY, startZ;
+  int size;
+} cube_t;
+
+int to1d(int x, int y, int z, int domSize) {
+  return x + y * domSize + z * domSize * domSize;
+}
+
+void merge_subcube(struct router*** routers, int* nrouters, cube_t* cube, int domSize) {
+  int changed = 1;
+  int neighb, neighbourIndex;
+  int dx,dy,dz;
+  int cx,cy,cz;
+  int index;
+  while (changed) {
+    changed = 0;
+    for (cx = cube->startX; cx < cube->startX + cube->size; cx++) {
+      for (cy = cube->startY; cy < cube->startY + cube->size; cy++) {
+        for (cz = cube->startZ; cz < cube->startZ + cube->size; cz++) {
+          index = to1d(cx, cy, cz, domSize);
+          for (neighb = 14; neighb < 27; neighb++) {
+            dx = neighb % 3 - 1;
+            dy = ((neighb - dx) / 3) % 3 - 1;
+            dz = (neighb - dx - 3 * dy) / 9 - 1;
+
+            if ((cx + dx >= cube->startX + cube->size) || (cy + dy >= cube->startY + cube->size) || (cz + dz >= cube->startZ + cube->size)) continue;
+            if ((cx + dx < 0) || (cy + dy < 0) || (cz + dz < 0)) continue;
+            // find index of neighbour cell
+            neighbourIndex = index + to1d(dx, dy, dz, domSize);
+            changed = changed + merge_clusters(nrouters[index],
+              routers[index], nrouters[neighbourIndex], routers[neighbourIndex]);
+          }
+        }
+      }
+    }
+  }
+}
+
+void join_cubes_x(struct router*** routers, int* nrouters, cube_t* first, int direction, int domSize) {
+  int cx = first->startX + (direction == 1 ? first->size - 1 : 0);
+  int cy, cz;
+  int i1, i2;
+  int ox = cx + direction;
+  int oy, oz;
+  int dchange, dy, dz;
+  int changed = 1;
+  while (changed) {
+    changed = 0;
+    for (cy = first->startY; cy < first->startY + first->size; cy++) {
+      for (cz = first->startZ; cz < first->startZ + first->size; cz++) {
+        i1 = to1d(cx, cy, cz, domSize);
+        for (dchange = 0; dchange < 9; dchange++) {
+          dy = dchange % 3;
+          dz = dchange / 3;
+          oy = cy - 1 + dy;
+          oz = cz - 1 + dz;
+          if (oy < 0 || oz < 0 || oy >= domSize || oz >= domSize) continue;
+          i2 = to1d(ox, oy, oz, domSize);
+          changed += merge_clusters(nrouters[i1], routers[i1], nrouters[i2], routers[i2]);
+        }
+      }
+    }
+  }
+}
+
+void join_cubes_y(struct router*** routers, int* nrouters, cube_t* first, int direction, int domSize) {
+  int cy = first->startY + (direction == 1 ? first->size - 1 : 0);
+  int cx, cz;
+  int i1, i2;
+  int oy = cy + direction;
+  int ox, oz;
+  int dchange, dx, dz;
+  int changed = 1;
+  while (changed) {
+    changed = 0;
+    for (cx = first->startX; cx < first->startX + first->size; cx++) {
+      for (cz = first->startZ; cz < first->startZ + first->size; cz++) {
+        i1 = to1d(cx, cy, cz, domSize);
+        for (dchange = 0; dchange < 9; dchange++) {
+          dx = dchange % 3;
+          dz = dchange / 3;
+          ox = cx - 1 + dx;
+          oz = cz - 1 + dz;
+          if (ox < 0 || oz < 0 || ox >= domSize || oz >= domSize) continue;
+          i2 = to1d(ox, oy, oz, domSize);
+          changed += merge_clusters(nrouters[i1], routers[i1], nrouters[i2], routers[i2]);
+        }
+      }
+    }
+  }
+}
+
+void join_cubes_z(struct router*** routers, int* nrouters, cube_t* first, int direction, int domSize) {
+  int cz = first->startZ + (direction == 1 ? first->size - 1 : 0);
+  int cx, cy;
+  int i1, i2;
+  int oz = cz + direction;
+  int ox, oy;
+  int dchange, dx, dy;
+  int changed = 1;
+  while (changed) {
+    changed = 0;
+    for (cx = first->startX; cx < first->startX + first->size; cx++) {
+      for (cy = first->startY; cy < first->startY + first->size; cy++) {
+        i1 = to1d(cx, cy, cz, domSize);
+        for (dchange = 0; dchange < 9; dchange++) {
+          dx = dchange % 3;
+          dy = dchange / 3;
+          ox = cx - 1 + dx;
+          oy = cy - 1 + dy;
+          if (ox < 0 || oy < 0 || ox >= domSize || oy >= domSize) continue;
+          i2 = to1d(ox, oy, oz, domSize);
+          changed += merge_clusters(nrouters[i1], routers[i1], nrouters[i2], routers[i2]);
+        }
+      }
+    }
+  }
+}
+
+/*
+static int cube_adj[8][3] = {
+  { 1, 2, 4 },
+  { 0, 3, 5 },
+  { 3, 0, 6 },
+  { 2, 1, 7 },
+  { 5, 6, 0 },
+  { 4, 7, 1 },
+  { 7, 4, 2 },
+  { 6, 5, 3 }
+};
+*/
+
+static int cube_directions[8][3] = {
+  { 1, 1, 1 },
+  { -1, 1, 1 },
+  { 1, -1, 1 },
+  { -1, -1, 1 },
+  { 1, 1, -1 },
+  { -1, 1, -1 },
+  { 1, -1, -1 },
+  { -1, -1, -1 }
+};
+
+void join_cubes(struct router*** routers, int* nrouters, cube_t** cubes, int start, int domSize, cube_t* bounding) {
+  int i, xd, yd, zd;
+  for (i = start; i < start + 8; i++) {
+    xd = cube_directions[i - start][0];
+    yd = cube_directions[i - start][1];
+    zd = cube_directions[i - start][2];
+    if (xd != 0) {
+      join_cubes_x(routers, nrouters, cubes[i], xd, domSize);
+    }
+    if (yd != 0) {
+      join_cubes_y(routers, nrouters, cubes[i], yd, domSize);
+    }
+    if (zd != 0) {
+      join_cubes_z(routers, nrouters, cubes[i], zd, domSize);
+    }
+  }
+
+  bounding->startX = cubes[start]->startX;
+  bounding->startY = cubes[start]->startY;
+  bounding->startZ = cubes[start]->startZ;
+  bounding->size = 2 * cubes[start]->size;
+}
+
+cube_t* gen_cube(int startX, int startY, int startZ, int size) {
+  cube_t* cube = (cube_t*)malloc(sizeof(cube_t));
+  cube->startX = startX;
+  cube->startY = startY;
+  cube->startZ = startZ;
+  cube->size = size;
+  return cube;
+}
+
+void split(cube_t** regions, cube_t* region, int offset) {
+  int c;
+  int splitSize = region->size / 2;
+  for (c = 0; c < 8; c++) {
+    int startX = region->startX + (c & 1) * splitSize;
+    int startY = region->startY + (c >> 1 & 1) * splitSize;
+    int startZ = region->startZ + (c >> 2 & 1) * splitSize;
+    regions[c + offset] = gen_cube(startX, startY, startZ, splitSize);
+  }
+}
+
+void print_cube(cube_t* cube) {
+  printf("cube { %d, %d, %d, %d }\n", cube->startX, cube->startY, cube->startZ, cube->size);
+}
+
 /* subroutine to identify all clusters in a domain decomposition structure */
 void find_all_clusters(struct cell_domain* dom)
 {
 
-  clock_t t1 = clock();
+  double t1 = omp_get_wtime();
   int cl = 1;
-  int ix,iy,iz,ic,i;
+  int ic,i;
   
   /* loop over all cells of the domain decomposition, then loop over the routers
      in each cell. If cluster has not yet been identified, find all the 
@@ -244,50 +438,118 @@ void find_all_clusters(struct cell_domain* dom)
       }
     }
   }
-  clock_t t2 = clock();
+  double t2 = omp_get_wtime();
 
   /* merge clusters between cells if they are connected. Start from first
      cell and move outwards, checking the "outward" half of the set of nearest
      neighbour cells. Always retain lower numbered cluster to prevent circular
      "flows" of cluster value */
-  int changed = 1;
-  int icp, neighb;
-  int dx,dy,dz;
-  /* keep repeating loop until nothing changes any more */
+  /* keep repeating loop until nothing changes any more
   while(changed) {
     changed = 0;
     for (ic=0;ic<dom->nx*dom->ny*dom->nz;ic++) {
-      /* loop over 13 of the 26 "nearest neighbour" cells on the cubic
-         lattice, ie the outward half - otherwise double counting will
-         occur and waste time */
       ix = ic%dom->nx;
       iy = ((ic-ix)/dom->nx)%dom->ny;
       iz = (ic-ix-dom->ny*iy)/(dom->nx*dom->ny);
       for (neighb=14;neighb<27;neighb++) {
-        /* modulo arithmetic to find dx,dy,dz */
         dx = neighb%3 - 1;
         dy = ((neighb-dx)/3)%3 - 1;
         dz = (neighb-dx-3*dy)/9 - 1;
-        /* prevent checking beyond limits of cell grid */
         if ((ix+dx>=dom->nx)||(iy+dy>=dom->ny)||(iz+dz>=dom->nz)) continue;
         if ((ix+dx<0)||(iy+dy<0)||(iz+dz<0)) continue;
-        /* find index of neighbour cell */
         icp = ic + dx + dom->ny*dy + dom->ny*dom->nz*dz;
         changed = changed + merge_clusters(dom->cell_nrtr[ic],
             dom->cell_rtr[ic], dom->cell_nrtr[icp], dom->cell_rtr[icp]);
       }
     }
+  } */
+
+  // even cells
+  if (dom->nx % 2 == 0) {
+    int numthreads = omp_get_max_threads();
+    int maxCubes = dom->nx * dom->ny * dom->nz;
+    int splits = 0;
+    if (numthreads > 1 && numthreads <= 8 && maxCubes >= 8) {
+      splits = 1;
+    } else if (numthreads > 8 && maxCubes >= 64) {
+      splits = 2;
+    }
+    int ncubes = (int)pow(8, splits);
+    cube_t domCube = { .startX = 0, .startY = 0, .startZ = 0, .size = dom->nx };
+    cube_t** regions = (cube_t**)malloc(ncubes * sizeof(cube_t*));
+    regions[0] = &domCube;
+    if (splits >= 1) {
+      split(regions, &domCube, 0);
+
+      if (splits == 2) {
+        int c = 0;
+        for (c = 0; c < 8; c++) {
+          int inv = 8 - c - 1;
+          split(regions, regions[c], inv * 8);
+        }
+      }
+    }
+
+    for (int a = 0; a < ncubes; a++) {
+      //print_cube(regions[a]);
+    }
+
+    int ncube = 0;
+    #pragma omp parallel for
+    for (ncube = 0; ncube < ncubes; ncube++) {
+      //printf("thread num %d\n", omp_get_thread_num());
+      cube_t* cube = regions[ncube];
+      merge_subcube(dom->cell_rtr, dom->cell_nrtr, cube, dom->nx);
+    }
+
+    if (splits == 2) {
+      int nc;
+      cube_t** supercubes = (cube_t**)malloc(sizeof(cube_t*) * 8);
+      for (nc = 0; nc < 8; nc++) {
+        supercubes[nc] = (cube_t*)malloc(sizeof(cube_t));
+        join_cubes(dom->cell_rtr, dom->cell_nrtr, regions, nc * 8, dom->nx, supercubes[nc]);
+        //print_cube(supercubes[nc]);
+      }
+      //printf("joined supercube super\n");
+      //fflush(stdout);
+      //dealloc regions
+      regions = supercubes;
+
+      int flip;
+      for (flip = 0; flip < 4; flip++) {
+        cube_t* swap = regions[flip];
+        regions[flip] = regions[7 - flip];
+        regions[7 - flip] = swap;
+      }
+    }
+    
+    cube_t bounding;
+    
+    //printf("%p\n", &bounding);
+    join_cubes(dom->cell_rtr, dom->cell_nrtr, regions, 0, dom->nx, &bounding);
+    // remember to dealloc
   }
-  clock_t t3 = clock();
+
+  //printf("done\n");
+  //fflush(stdout);
+
+
+  double t3 = omp_get_wtime();
   dom->ncluster = count_clusters(dom);
+
+  //printf("counted\n");
+  //fflush(stdout);
   dom->spanning_cluster = find_spanning_cluster(dom);
-  clock_t t4 = clock();
+  //printf("spanning\n");
+  //fflush(stdout);
+  double t4 = omp_get_wtime();
   /* print timings - you may need to disable this in parallel if
      it is causing problems */
   printf("(%8.4f %8.4f %8.4f sec) ",
-      (double)(t2-t1)/(double)CLOCKS_PER_SEC, 
-      (double)(t3-t2)/(double)CLOCKS_PER_SEC, 
-      (double)(t4-t3)/(double)CLOCKS_PER_SEC);
+      (double)(t2-t1), 
+      (double)(t3-t2), 
+      (double)(t4-t3)/*,
+      (double)(t4-t1)*/);
 }
 
 /* recursive subroutine that finds all the "connected" routers in a list,

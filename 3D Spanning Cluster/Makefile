@@ -3,7 +3,7 @@
 ########################################
 
 # C compiler and flags
-CC=gcc -O0 -march=native -fopenmp
+CC=gcc -O0 -march=native -fopenmp -g
 CFLAGS=-Wall -Wextra 
 
 # Command to use for linking and executable
